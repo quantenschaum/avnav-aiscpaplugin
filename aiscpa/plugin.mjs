@@ -22,13 +22,13 @@
  */
 
 export default async (fApi) => {
-  const STOREKEYAISCPA = fApi.getStoreBaseKey() + ".AisCpa";
-  fApi.setStoreData(STOREKEYAISCPA, true); // CPAs ares visible by default
+  const VISIBLE = fApi.getStoreBaseKey() + ".visible";
+  fApi.setStoreData(VISIBLE, fApi.getLocalStorage(VISIBLE, false));
 
   const dev = new URLSearchParams(window.location.search).get("dev") == 1;
   function log(...a) {
     console.log(
-      "%cAISCPA",
+      "%cCPA",
       "background: gold; color: black; padding: 2px 4px; border-radius: 3px;",
       ...a,
     );
@@ -118,7 +118,7 @@ export default async (fApi) => {
       currentZoom: "map.currentZoom",
       navCircleColor: "properties.navCircleColor",
       aisLayerVisible: "properties.layers.ais",
-      aiscpaVisible: STOREKEYAISCPA,
+      aiscpaVisible: VISIBLE,
     },
     initFunction: function (fCanvas, fProps) {
       this.CPAOpacity = fProps.Opacity;
@@ -157,7 +157,7 @@ export default async (fApi) => {
 
           const tpos = (aAis.fromEstimated && aAis.estimated) || aAis.received;
 
-          if (undef(tpos, tpos?.lon, tpos?.lat, aAis.received?.course)) {
+          if (undef(tpos?.lon, tpos?.lat, aAis.received?.course)) {
             continue;
           }
 
@@ -180,7 +180,6 @@ export default async (fApi) => {
           if (!aAis.warning) continue;
           if (
             undef(
-              fProps.position,
               fProps.position?.lat,
               fProps.position?.lon,
               fProps.speed,
@@ -383,18 +382,14 @@ export default async (fApi) => {
   fApi.registerUserButton(
     {
       name: "AisCpaButton",
-      shortText: "AIS CPA",
+      shortText: "CPA",
       longText: "Show/Hide AIS CPA drawings",
       icon: "images/icon.svg",
-      toggle: true,
-      storeKeys: {
-        toggle: STOREKEYAISCPA,
-      },
-      onClick: (fEv) => {
-        //debug("AisCpaWidget::onClick() ev = ", ev);
-        const state = !fApi.getStoreData(STOREKEYAISCPA);
-        fApi.setStoreData(STOREKEYAISCPA, state);
-        //debug("AisCpaWidget::onClick() toggle = ", toggle);
+      storeKeys: { toggle: VISIBLE },
+      onClick: (e) => {
+        const visible = !fApi.getStoreData(VISIBLE);
+        fApi.setStoreData(VISIBLE, visible);
+        fApi.setLocalStorage(VISIBLE, visible);
       },
     },
     "navpage",
