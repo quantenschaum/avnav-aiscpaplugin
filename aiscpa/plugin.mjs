@@ -164,9 +164,9 @@ export default async (fApi) => {
           }
           if (!props.showCPA || !target.warning) continue;
           drawCPA(context, props, target);
-          // } catch (e) {
-          // log("error MMSI", target.mmsi, e);
-        } finally {
+        } catch (e) {
+          log("error MMSI", target.mmsi, e);
+          // } finally {
         }
       }
 
