@@ -30,6 +30,7 @@ export default async (fApi) => {
     console.log(
       "%cCPA",
       "background: gold; color: black; padding: 2px 4px; border-radius: 3px;",
+      new Date().toLocaleTimeString("en-US", { hour12: false }),
       ...a,
     );
   }
@@ -40,6 +41,10 @@ export default async (fApi) => {
   log("start", fApi, fApi.getAvNavVersion());
 
   const LatLon = fApi.LatLon();
+
+  function undef(...values) {
+    return values.some((value) => value == null);
+  }
 
   // AVNAV: draws AIS CPA line on map display widget
   const AisCpaParameter = {
@@ -91,23 +96,30 @@ export default async (fApi) => {
       default: false,
       description: "draw CPA line relative to own ship, perpendicular to RMV",
     },
+    HistoryTime: {
+      type: "NUMBER",
+      default: 10,
+      description:
+        "Time in minutes to store target history for drawing, 0 disables history drawing",
+    },
+    HistoryColor: {
+      type: "COLOR",
+      default: "#606060",
+      description: "Color of the target history",
+    },
+    HistoryLineWidth: {
+      type: "NUMBER",
+      default: 2,
+      description: "Width of the target history line",
+    },
   };
 
+  let lastUpdateCount = 0;
+  const targetHistory = new TargetHistory(debug);
+
   const AisCpaWidget = {
-    // Editable Parameters
-    Opacity: 1.0,
-    CircleRadius: 7,
-    FillColor: "yellow",
-    LineColor: "red",
-    LineWidth: 4,
-    StrokeWidthCircle: 1,
-    StrokeColorCircle: "black",
-    DrawRealSize: true,
-    MinZoom: 11,
-    Relative: false,
     name: "AisCpaWidget",
     type: "map",
-    // Fordere einfach alles an, was dich interessiert
     storeKeys: {
       // see https://github.com/wellenvogel/avnav/blob/master/viewer/util/keys.ts
       aisList: "nav.ais.list",
@@ -118,147 +130,105 @@ export default async (fApi) => {
       currentZoom: "map.currentZoom",
       navCircleColor: "properties.navCircleColor",
       aisLayerVisible: "properties.layers.ais",
-      aiscpaVisible: VISIBLE,
+      showCPA: VISIBLE,
     },
-    initFunction: function (fCanvas, fProps) {
-      this.CPAOpacity = fProps.Opacity;
-      this.CPAStrokeWidthCircle = fProps.StrokeWidthCircle;
-      this.CPAFillColor = fProps.FillColor;
-      this.CPACircleRadius = fProps.CircleRadius;
-      this.CPALineColor = fProps.LineColor;
-      this.CPALineWidth = fProps.LineWidth;
-      this.CPAStrokeColorCircle = fProps.StrokeColorCircle;
-      this.CPACourseColor = fProps.navCircleColor;
-      this.CPADrawRealSize = fProps.DrawRealSize;
-      this.CPAMinZoom = fProps.MinZoom;
-      this.CPARelative = fProps.Relative;
+    initFunction: function (map, data) {
+      debug("init");
     },
-    renderCanvas: function (fCanvas, fProps, context) {
-      // debug(fProps);
-      if (
-        !fProps.aisLayerVisible ||
-        fProps.currentZoom < this.CPAMinZoom ||
-        (!fProps.aiscpaVisible && !this.CPADrawRealSize)
-      ) {
-        return;
+    finalizeFunction: function () {
+      debug("finalize");
+    },
+    renderCanvas: function (canvas, props, context) {
+      if (!props.aisLayerVisible) return;
+      // debug(props.aisUpdateCount, props);
+
+      if (props.aisUpdateCount - lastUpdateCount > 1) {
+        debug("missed updates", props.aisUpdateCount - lastUpdateCount - 1);
       }
+      lastUpdateCount = props.aisUpdateCount;
 
-      // debug("update", fProps.aisUpdateCount);
+      const ctx = context.getContext();
+      ctx.save();
 
-      const aCtx = context.getContext();
-      aCtx.save();
+      targetHistory.cleanup(props.HistoryTime);
+      // debug("hist", targetHistory.targets(), targetHistory.points());
 
-      for (const aAisidx in fProps.aisList) {
-        const aAis = fProps.aisList[aAisidx];
+      for (const target of props.aisList) {
         try {
-          //debug("AisCpaWidget::renderCanvas() ais warning for MMSI " + aAis.mmsi + ", name " + aAis.received.shipname + ", to_bow " + aAis.received.to_bow);
-          //debug("AisCpaWidget::renderCanvas() ais = ", aAis);
-          // debug(aAis);
-
-          const tpos = (aAis.fromEstimated && aAis.estimated) || aAis.received;
-
-          if (undef(tpos?.lon, tpos?.lat, aAis.received?.course)) {
-            continue;
+          // debug(target);
+          if (props.HistoryTime) {
+            drawTargetHistory(context, props, target);
           }
-
-          const rotation = (aAis.fromEstimated && aAis.rotation) || 0;
-
-          if (this.CPADrawRealSize) {
-            drawRealSize(
-              this,
-              aCtx,
-              tpos,
-              (aAis.received.heading ?? aAis.received.course) + rotation,
-              aAis.received.length,
-              aAis.received.beam,
-              aAis.received.to_bow,
-              aAis.received.to_port,
-            );
+          if (props.DrawRealSize) {
+            drawRealSize(context, target);
           }
-
-          if (!fProps.aiscpaVisible) continue;
-          if (!aAis.warning) continue;
-          if (
-            undef(
-              fProps.position?.lat,
-              fProps.position?.lon,
-              fProps.speed,
-              fProps.course,
-              aAis.received?.speed,
-              aAis.cpadata?.tcpa,
-            )
-          ) {
-            continue;
-          }
-          drawCPA(
-            this,
-            aCtx,
-            // aAis.warning,
-            fProps.position,
-            fProps.speed,
-            fProps.course,
-            tpos,
-            aAis.received.speed,
-            aAis.received.course + rotation,
-            aAis.cpadata.tcpa,
-          );
-          // } catch (aE) {
-          // log(
-          // "error while processing AIS data for mmsi " +
-          // aAis.mmsi,
-          // aE,
-          // );
+          if (!props.showCPA || !target.warning) continue;
+          drawCPA(context, props, target);
+          // } catch (e) {
+          // log("error MMSI", target.mmsi, e);
         } finally {
         }
       }
 
-      aCtx.restore();
-      //debug("AisCpaWidget::renderCanvas() fini");
+      ctx.restore();
     },
   };
 
-  function undef(...values) {
-    return values.some((value) => value == null);
+  function drawTargetHistory(context, props, target) {
+    const pos = (target.fromEstimated && target.estimated) || target.received;
+    const history = targetHistory.add(target);
+    const [w, h] = context.getDimensions();
+    const positions = [...history, pos];
+    const pxy = positions.map((p) => context.lonLatToPixel(p.lon, p.lat));
+    const visible = pxy.some(([x, y]) => x >= 0 && x <= w && y >= 0 && y <= h);
+    // const visible = pxy
+    // .slice(1)
+    // .some((point, i) => intersects(pxy[i], point, w, h));
+    if (!visible) return;
+    const scale = context.getScale();
+    const ctx = context.getContext();
+    ctx.beginPath();
+    ctx.strokeStyle = props.HistoryColor;
+    ctx.lineWidth = scale * props.HistoryLineWidth;
+    pxy.forEach((p, i) => {
+      if (i == 0) ctx.moveTo(...p);
+      else ctx.lineTo(...p);
+    });
+    ctx.stroke();
   }
 
-  function drawRealSize(
-    self,
-    ctx,
-    position,
-    heading,
-    length,
-    beam,
-    tobow,
-    toport,
-  ) {
-    if (undef(position, heading, length, beam, tobow, toport)) return;
+  function drawRealSize(context, target) {
+    const pos = (target.fromEstimated && target.estimated) || target.received;
+    const rotation = (target.fromEstimated && target.rotation) || 0;
+    const { heading, course, length, beam, to_bow, to_port } = target.received;
+    const hdg = (target.received.heading ?? target.received.course) + rotation;
+    if (undef(pos?.lon, pos?.lat, hdg, length, beam, to_bow, to_port)) return;
 
-    // debug(self);
-    const scale = self.getScale();
-    const [width, height] = self.getDimensions();
-    // debug(scale, width, height);
-    const p = new LatLon(position.lat, position.lon);
-    const [x, y] = self.lonLatToPixel(p.lon, p.lat);
+    const scale = context.getScale();
+    const [width, height] = context.getDimensions();
+    const p = new LatLon(pos.lat, pos.lon);
+    const [x, y] = context.lonLatToPixel(p.lon, p.lat);
 
-    if (x < 0 || x > width || y < 0 || y > height) return; // skip if off screen
+    if (x < 0 || x > width || y < 0 || y > height) return;
+    // debug(pos, hdg, length, beam, to_bow, to_port);
 
-    // debug(position, heading, length, beam, tobow, toport);
-    const tostern = length - tobow;
-    const stern = p.destinationPoint(tostern, heading + 180);
-    const sternport = stern.destinationPoint(toport, heading - 90);
-    const port = sternport.destinationPoint(0.9 * length, heading);
-    const sternmid = sternport.destinationPoint(beam / 2, heading + 90);
-    const bowmid = sternmid.destinationPoint(length, heading);
-    const stb = port.destinationPoint(beam, heading + 90);
-    const sternstb = sternport.destinationPoint(beam, heading + 90);
+    const tostern = length - to_bow;
+    const stern = p.destinationPoint(tostern, hdg + 180);
+    const sternport = stern.destinationPoint(to_port, hdg - 90);
+    const port = sternport.destinationPoint(0.9 * length, hdg);
+    const sternmid = sternport.destinationPoint(beam / 2, hdg + 90);
+    const bow = sternmid.destinationPoint(length, hdg);
+    const stb = port.destinationPoint(beam, hdg + 90);
+    const sternstb = sternport.destinationPoint(beam, hdg + 90);
     const outline = [
-      self.lonLatToPixel(sternport.lon, sternport.lat),
-      self.lonLatToPixel(port.lon, port.lat),
-      self.lonLatToPixel(bowmid.lon, bowmid.lat),
-      self.lonLatToPixel(stb.lon, stb.lat),
-      self.lonLatToPixel(sternstb.lon, sternstb.lat),
+      context.lonLatToPixel(sternport.lon, sternport.lat),
+      context.lonLatToPixel(port.lon, port.lat),
+      context.lonLatToPixel(bow.lon, bow.lat),
+      context.lonLatToPixel(stb.lon, stb.lat),
+      context.lonLatToPixel(sternstb.lon, sternstb.lat),
     ];
 
+    const ctx = context.getContext();
     ctx.beginPath();
     ctx.globalAlpha = 1; // fixes transparency
     ctx.strokeStyle = "#303030";
@@ -273,94 +243,92 @@ export default async (fApi) => {
     ctx.fill();
   }
 
-  function drawCPA(
-    fSelf,
-    fCtx,
-    fOwnPos,
-    fOwnSpeed,
-    fOwnCourse,
-    fTargetPos,
-    fTargetSpeed,
-    fTargetCourse,
-    fTcpa,
-  ) {
-    // debug("own", fOwnPos, fOwnSpeed, fOwnCourse);
-    // debug("target", fTargetPos, fTargetSpeed, fTargetCourse);
-    // debug("tcpa", fTcpa);
-    const scale = fSelf.getScale();
+  function drawCPA(context, props, target) {
+    const tcpa = target.cpadata.tcpa;
+    if (undef(tcpa)) return;
 
-    const aP1 = new LatLon(fTargetPos.lat, fTargetPos.lon);
-    const aTargetXY = fSelf.lonLatToPixel(aP1.lon, aP1.lat);
+    const tpos = (target.fromEstimated && target.estimated) || target.received;
+    const rotation = (target.fromEstimated && target.rotation) || 0;
+    const tcourse = target.received.course + rotation;
+    const tspeed = target.received.speed;
+    if (undef(tpos?.lon, tpos?.lat, tcourse, tspeed)) return;
 
-    const aP2 = aP1.destinationPoint(fTargetSpeed * fTcpa, fTargetCourse);
-    if (fSelf.CPARelative)
-      aP2 = aP2.destinationPoint(-fOwnSpeed * fTcpa, fOwnCourse);
-    const aTargetCPAXY = fSelf.lonLatToPixel(aP2.lon, aP2.lat);
-    const aP3 = new LatLon(fOwnPos.lat, fOwnPos.lon);
-    const aOwnXY = fSelf.lonLatToPixel(aP3.lon, aP3.lat);
-    const aP4 = aP3.destinationPoint(fOwnSpeed * fTcpa, fOwnCourse);
-    const aOwnCPAXY = fSelf.CPARelative
+    const { position, course, speed } = props;
+    if (undef(position?.lon, position?.lat, course, speed)) return;
+
+    const aP1 = new LatLon(tpos.lat, tpos.lon);
+    const aTargetXY = context.lonLatToPixel(aP1.lon, aP1.lat);
+
+    let aP2 = aP1.destinationPoint(tspeed * tcpa, tcourse);
+    if (props.Relative) aP2 = aP2.destinationPoint(-speed * tcpa, course);
+    const aTargetCPAXY = context.lonLatToPixel(aP2.lon, aP2.lat);
+    const aP3 = new LatLon(position.lat, position.lon);
+    const aOwnXY = context.lonLatToPixel(aP3.lon, aP3.lat);
+    const aP4 = aP3.destinationPoint(speed * tcpa, course);
+    const aOwnCPAXY = props.Relative
       ? aOwnXY
-      : fSelf.lonLatToPixel(aP4.lon, aP4.lat);
+      : context.lonLatToPixel(aP4.lon, aP4.lat);
 
-    fCtx.globalAlpha = fSelf.CPAOpacity;
+    const scale = context.getScale();
+    const ctx = context.getContext();
+    ctx.globalAlpha = props.Opacity;
     // draw CPA connection
-    fCtx.beginPath();
-    fCtx.strokeStyle = fSelf.CPAFillColor;
-    fCtx.lineWidth = scale * fSelf.CPALineWidth;
-    fCtx.moveTo(aOwnCPAXY[0], aOwnCPAXY[1]);
-    fCtx.lineTo(aTargetCPAXY[0], aTargetCPAXY[1]);
-    fCtx.stroke();
+    ctx.beginPath();
+    ctx.strokeStyle = props.FillColor;
+    ctx.lineWidth = scale * (props.LineWidth ?? 4);
+    ctx.moveTo(aOwnCPAXY[0], aOwnCPAXY[1]);
+    ctx.lineTo(aTargetCPAXY[0], aTargetCPAXY[1]);
+    ctx.stroke();
 
-    fCtx.beginPath();
-    fCtx.strokeStyle = fSelf.CPALineColor;
-    fCtx.setLineDash([scale * 10, scale * 6]);
-    fCtx.moveTo(aOwnCPAXY[0], aOwnCPAXY[1]);
-    fCtx.lineTo(aTargetCPAXY[0], aTargetCPAXY[1]);
-    fCtx.stroke();
+    ctx.beginPath();
+    ctx.strokeStyle = props.LineColor;
+    ctx.setLineDash([scale * 10, scale * 6]);
+    ctx.moveTo(aOwnCPAXY[0], aOwnCPAXY[1]);
+    ctx.lineTo(aTargetCPAXY[0], aTargetCPAXY[1]);
+    ctx.stroke();
 
     // draw lines from current positions to positions at TCPA
-    fCtx.beginPath();
-    fCtx.strokeStyle = fSelf.CPACourseColor;
-    fCtx.lineWidth = scale;
-    fCtx.moveTo(aOwnCPAXY[0], aOwnCPAXY[1]);
-    fCtx.lineTo(aOwnXY[0], aOwnXY[1]);
-    fCtx.stroke();
+    ctx.beginPath();
+    ctx.strokeStyle = props.navCircleColor;
+    ctx.lineWidth = scale;
+    ctx.moveTo(aOwnCPAXY[0], aOwnCPAXY[1]);
+    ctx.lineTo(aOwnXY[0], aOwnXY[1]);
+    ctx.stroke();
 
-    fCtx.beginPath();
-    fCtx.moveTo(aTargetCPAXY[0], aTargetCPAXY[1]);
-    fCtx.lineTo(aTargetXY[0], aTargetXY[1]);
-    fCtx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(aTargetCPAXY[0], aTargetCPAXY[1]);
+    ctx.lineTo(aTargetXY[0], aTargetXY[1]);
+    ctx.stroke();
 
     // draw circles for positions at TCPA
-    fCtx.lineWidth = scale * fSelf.CPAStrokeWidthCircle;
-    fCtx.strokeStyle = fSelf.CPAStrokeColorCircle;
-    fCtx.setLineDash([]);
-    fCtx.fillStyle = fSelf.CPAFillColor;
-    if (!fSelf.CPARelative) {
-      fCtx.beginPath();
-      fCtx.arc(
+    ctx.lineWidth = scale * props.StrokeWidthCircle;
+    ctx.strokeStyle = props.StrokeColorCircle;
+    ctx.setLineDash([]);
+    ctx.fillStyle = props.FillColor;
+    if (!props.Relative) {
+      ctx.beginPath();
+      ctx.arc(
         aOwnCPAXY[0],
         aOwnCPAXY[1],
-        scale * fSelf.CPACircleRadius,
+        scale * props.CircleRadius,
         0,
         2 * Math.PI,
       );
-      fCtx.fill();
-      fCtx.stroke();
+      ctx.fill();
+      ctx.stroke();
     }
 
-    if (fSelf.CPARelative || fTargetSpeed > 0.0) {
-      fCtx.beginPath();
-      fCtx.arc(
+    if (props.Relative || tspeed > 0.0) {
+      ctx.beginPath();
+      ctx.arc(
         aTargetCPAXY[0],
         aTargetCPAXY[1],
-        scale * fSelf.CPACircleRadius,
+        scale * props.CircleRadius,
         0,
         2 * Math.PI,
       );
-      fCtx.fill();
-      fCtx.stroke();
+      ctx.fill();
+      ctx.stroke();
     }
   }
 
@@ -397,13 +365,82 @@ export default async (fApi) => {
   debug(
     "aiscpa plugin.mjs registerUserButton(AisCpaWidget, AisCpaParameter) done",
   );
-
-  debug("aiscpa plugin.mjs loaded");
-  debug("name", fApi.getPluginName());
-  debug("baseUrl", fApi.getBaseUrl());
-  const cfg = await fApi.getConfig();
-  debug("plugin config", cfg);
-  return () => {
-    debug("cleanup called for aiscpa plugin.mjs");
-  };
 };
+
+class TargetHistory {
+  constructor(log = console.log) {
+    this.log = log;
+    this.historyByMmsi = new Map();
+    this.log("TargetHistory::constructor()");
+  }
+
+  add(target) {
+    const mmsi = target?.mmsi;
+    const lat = target?.received?.lat;
+    const lon = target?.received?.lon;
+    let history = this.historyByMmsi.get(mmsi);
+    if (!history) {
+      history = [];
+      this.historyByMmsi.set(mmsi, history);
+    }
+    if (lat == null || lon == null) return history;
+    const last = history.at(-1);
+    if (last?.lon != lon && last?.lat != lat)
+      history.push({ lat, lon, ts: Date.now() / 1000 });
+    return history;
+  }
+
+  cleanup(maxMinutes) {
+    const tmin = Date.now() / 1000 - maxMinutes * 60;
+    for (const [mmsi, history] of this.historyByMmsi) {
+      while (history.length && history[0].ts < tmin) {
+        history.shift();
+      }
+      if (!history.length) this.historyByMmsi.delete(mmsi);
+    }
+  }
+
+  clear() {
+    this.historyByMmsi.clear();
+  }
+
+  targets() {
+    return this.historyByMmsi.size;
+  }
+
+  points() {
+    return [...this.historyByMmsi.values()].reduce(
+      (sum, history) => sum + history.length,
+      0,
+    );
+  }
+}
+
+function intersects(a, b, w, h) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const p = [-dx, dx, -dy, dy];
+  const q = [a[0], w - a[0], a[1], h - a[1]];
+
+  // if (![...a, ...b, w, h].every(Number.isFinite) || w < 0 || h < 0) {
+  // return false;
+  // }
+
+  let tMin = 0;
+  let tMax = 1;
+  for (let i = 0; i < p.length; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false;
+      continue;
+    }
+
+    const t = q[i] / p[i];
+    if (p[i] < 0) {
+      tMin = Math.max(tMin, t);
+    } else {
+      tMax = Math.min(tMax, t);
+    }
+    if (tMin > tMax) return false;
+  }
+  return true;
+}
