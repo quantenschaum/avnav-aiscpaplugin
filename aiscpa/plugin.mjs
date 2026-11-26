@@ -46,6 +46,53 @@ export default async (fApi) => {
     return values.some((value) => value == null);
   }
 
+  class TargetHistory {
+    constructor() {
+      this.historyByMmsi = new Map();
+    }
+
+    add(target) {
+      const mmsi = target?.mmsi;
+      const lat = target?.received?.lat;
+      const lon = target?.received?.lon;
+      let history = this.historyByMmsi.get(mmsi);
+      if (!history) {
+        history = [];
+        this.historyByMmsi.set(mmsi, history);
+      }
+      if (lat == null || lon == null) return history;
+      const last = history.at(-1);
+      if (last?.lon != lon && last?.lat != lat)
+        history.push({ lat, lon, ts: Date.now() / 1000 });
+      return history;
+    }
+
+    cleanup(maxMinutes) {
+      const tmin = Date.now() / 1000 - maxMinutes * 60;
+      for (const [mmsi, history] of this.historyByMmsi) {
+        while (history.length && history[0].ts < tmin) {
+          history.shift();
+        }
+        if (!history.length) this.historyByMmsi.delete(mmsi);
+      }
+    }
+
+    clear() {
+      this.historyByMmsi.clear();
+    }
+
+    targets() {
+      return this.historyByMmsi.size;
+    }
+
+    points() {
+      return [...this.historyByMmsi.values()].reduce(
+        (sum, history) => sum + history.length,
+        0,
+      );
+    }
+  }
+
   // AVNAV: draws AIS CPA line on map display widget
   const AisCpaParameter = {
     Opacity: {
@@ -115,7 +162,7 @@ export default async (fApi) => {
   };
 
   let lastUpdateCount = 0;
-  const targetHistory = new TargetHistory(debug);
+  const targetHistory = new TargetHistory();
 
   const AisCpaWidget = {
     name: "AisCpaWidget",
@@ -174,16 +221,43 @@ export default async (fApi) => {
     },
   };
 
+  function intersects(a, b, w, h) {
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const p = [-dx, dx, -dy, dy];
+    const q = [a[0], w - a[0], a[1], h - a[1]];
+
+    // if (![...a, ...b, w, h].every(Number.isFinite) || w < 0 || h < 0) {
+    // return false;
+    // }
+
+    let tMin = 0;
+    let tMax = 1;
+    for (let i = 0; i < p.length; i++) {
+      if (p[i] === 0) {
+        if (q[i] < 0) return false;
+        continue;
+      }
+
+      const t = q[i] / p[i];
+      if (p[i] < 0) {
+        tMin = Math.max(tMin, t);
+      } else {
+        tMax = Math.min(tMax, t);
+      }
+      if (tMin > tMax) return false;
+    }
+    return true;
+  }
+
   function drawTargetHistory(context, props, target) {
     const pos = (target.fromEstimated && target.estimated) || target.received;
     const history = targetHistory.add(target);
     const [w, h] = context.getDimensions();
     const positions = [...history, pos];
     const pxy = positions.map((p) => context.lonLatToPixel(p.lon, p.lat));
-    const visible = pxy.some(([x, y]) => x >= 0 && x <= w && y >= 0 && y <= h);
-    // const visible = pxy
-    // .slice(1)
-    // .some((point, i) => intersects(pxy[i], point, w, h));
+    const visible = pxy.some(([x, y]) => x >= 0 && x <= w && y >= 0 && y <= h); // faster check
+    // const visible = pxy.slice(1).some((p, i) => intersects(pxy[i], p, w, h));
     if (!visible) return;
     const scale = context.getScale();
     const ctx = context.getContext();
@@ -345,7 +419,6 @@ export default async (fApi) => {
   }
 
   fApi.registerWidget(AisCpaWidget, AisCpaParameter);
-  debug("aiscpa plugin.mjs registerWidget(AisCpaWidget, AisCpaParameter) done");
 
   fApi.registerUserButton(
     {
@@ -362,85 +435,4 @@ export default async (fApi) => {
     },
     "navpage",
   );
-  debug(
-    "aiscpa plugin.mjs registerUserButton(AisCpaWidget, AisCpaParameter) done",
-  );
 };
-
-class TargetHistory {
-  constructor(log = console.log) {
-    this.log = log;
-    this.historyByMmsi = new Map();
-    this.log("TargetHistory::constructor()");
-  }
-
-  add(target) {
-    const mmsi = target?.mmsi;
-    const lat = target?.received?.lat;
-    const lon = target?.received?.lon;
-    let history = this.historyByMmsi.get(mmsi);
-    if (!history) {
-      history = [];
-      this.historyByMmsi.set(mmsi, history);
-    }
-    if (lat == null || lon == null) return history;
-    const last = history.at(-1);
-    if (last?.lon != lon && last?.lat != lat)
-      history.push({ lat, lon, ts: Date.now() / 1000 });
-    return history;
-  }
-
-  cleanup(maxMinutes) {
-    const tmin = Date.now() / 1000 - maxMinutes * 60;
-    for (const [mmsi, history] of this.historyByMmsi) {
-      while (history.length && history[0].ts < tmin) {
-        history.shift();
-      }
-      if (!history.length) this.historyByMmsi.delete(mmsi);
-    }
-  }
-
-  clear() {
-    this.historyByMmsi.clear();
-  }
-
-  targets() {
-    return this.historyByMmsi.size;
-  }
-
-  points() {
-    return [...this.historyByMmsi.values()].reduce(
-      (sum, history) => sum + history.length,
-      0,
-    );
-  }
-}
-
-function intersects(a, b, w, h) {
-  const dx = b[0] - a[0];
-  const dy = b[1] - a[1];
-  const p = [-dx, dx, -dy, dy];
-  const q = [a[0], w - a[0], a[1], h - a[1]];
-
-  // if (![...a, ...b, w, h].every(Number.isFinite) || w < 0 || h < 0) {
-  // return false;
-  // }
-
-  let tMin = 0;
-  let tMax = 1;
-  for (let i = 0; i < p.length; i++) {
-    if (p[i] === 0) {
-      if (q[i] < 0) return false;
-      continue;
-    }
-
-    const t = q[i] / p[i];
-    if (p[i] < 0) {
-      tMin = Math.max(tMin, t);
-    } else {
-      tMax = Math.min(tMax, t);
-    }
-    if (tMin > tMax) return false;
-  }
-  return true;
-}
