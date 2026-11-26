@@ -25,7 +25,7 @@ export default async (fApi) => {
   const VISIBLE = fApi.getStoreBaseKey() + ".visible";
   fApi.setStoreData(VISIBLE, fApi.getLocalStorage(VISIBLE, false));
 
-  const dev = new URLSearchParams(window.location.search).get("dev") == 1;
+  const DEV = new URLSearchParams(window.location.search).get("dev") == 1;
   function log(...a) {
     console.log(
       "%cCPA",
@@ -35,7 +35,7 @@ export default async (fApi) => {
     );
   }
   function debug(...a) {
-    if (!dev) return;
+    if (!DEV) return;
     log(...a);
   }
   log("start", fApi, fApi.getAvNavVersion());
@@ -269,6 +269,16 @@ export default async (fApi) => {
       else ctx.lineTo(...p);
     });
     ctx.stroke();
+    ctx.stroke();
+
+    if (DEV) {
+      ctx.fillStyle = props.HistoryColor;
+      pxy.forEach(([x, y]) => {
+        ctx.beginPath();
+        ctx.arc(x, y, scale * 1.5 * props.HistoryLineWidth, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+    }
   }
 
   function drawRealSize(context, target) {
